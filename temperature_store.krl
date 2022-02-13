@@ -17,7 +17,7 @@ ruleset temperature_store {
         inrange_temperatures = function() {
             ent:temperature_list.filter(function(x) {
                 ent:threshold_violation_list.filter(function(y) {
-                    x.keys().slice(0,0) == y.keys().slice(0,0) && x.values().slice(0,0) == y.values().slice(0,0)
+                    x{"temperature"} == y{"temperature"} && x{"timestamp"} == y{"timestamp"}
                 }).length() == 0
             })
         }
@@ -39,7 +39,7 @@ ruleset temperature_store {
         }
 
         always {
-            ent:temperature_list := ent:temperature_list.append({}.put(timestamp, temperature))
+            ent:temperature_list := ent:temperature_list.append({"timestamp": timestamp, "temperature": temperature})
         }
     }
 
@@ -51,7 +51,7 @@ ruleset temperature_store {
         }
         always {
             // stores the violation temperature and a timestamp in a different entity variable that collects threshold violations.
-            ent:threshold_violation_list := ent:threshold_violation_list.append({}.put(timestamp, temperature))
+            ent:threshold_violation_list := ent:threshold_violation_list.append({"timestamp": timestamp, "temperature": temperature})
         }
     }
 

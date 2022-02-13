@@ -1,8 +1,6 @@
 ruleset wovyn_base {
-
-    global {
-        temperature_threshold = 80.0;
-        notify_number = "+16265816580"
+    meta {
+        use module sensor_profile alias profile
     }
 
     rule process_heartbeat {
@@ -34,7 +32,7 @@ ruleset wovyn_base {
         fired {
             raise wovyn event "threshold_violation" 
                 attributes event:attrs
-                if (temperature > temperature_threshold);
+                if (temperature > profile:temperature_threshold().klog("temp threshold"));
         } 
     }
 
@@ -45,8 +43,8 @@ ruleset wovyn_base {
         }
         fired {
             raise sms event "new_message" attributes {
-                "to": notify_number,
-                "message": "Temperature is over " + temperature_threshold + " degrees! It is " + temperature + " degrees."
+                "to": profile:notify_number(),
+                "message": "Temperature is over " + profile:temperature_threshold() + " degrees! It is " + temperature + " degrees."
             }
         } 
     }

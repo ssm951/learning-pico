@@ -1,6 +1,28 @@
 ruleset wovyn_base {
     meta {
         use module sensor_profile alias profile
+        use module io.picolabs.wrangler alias wrangler
+    }
+
+    rule init {
+        select when wrangler ruleset_installed where event:attrs{"rids"} >< meta:rid
+        pre {
+            tags = ["sensor"]
+            eventPolicy = {"allow": [{"domain": "*", "name": "*"}], "deny": []}
+            queryPolicy = {"allow": [{"rid": "*", "name": "*"}], "deny": []}
+        }
+        every {
+            wrangler:createChannel(tags,eventPolicy,queryPolicy) setting(channel)
+            event:send(
+                { "eci": wrangler:parent_eci(), 
+                  "domain": "sensor", "type": "init_complete",
+                  "attrs": event:attrs.put("channel", channel{"id"})
+                }
+            )
+        }
+        always {
+            
+        }
     }
 
     rule process_heartbeat {

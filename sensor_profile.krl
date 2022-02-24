@@ -1,5 +1,7 @@
 ruleset sensor_profile {
     meta {
+        use module io.picolabs.wrangler alias wrangler
+
         provides get_profile, sensor_name, sensor_location, notify_number, temperature_threshold
         shares get_profile, sensor_name, sensor_location, notify_number, temperature_threshold
     }
@@ -44,7 +46,17 @@ ruleset sensor_profile {
             sensor_name = event:attrs{"name"}.klog("sensor_name received: ") 
             sms_number = event:attrs{"sms_number"}.klog("sms_number received: ") 
             threshold = event:attrs{"threshold"}.klog("threshold received: ") 
+            parent_eci = wrangler:parent_eci()
         }
+        event:send(
+            { "eci": parent_eci, 
+              "domain": "sensor", "type": "update_complete",
+              "attrs": {
+                  "old_name": ent:name,
+                  "new_name": sensor_name
+              }
+            }
+        )
         always {
             ent:location := event:attrs{"location"} || ent:location
             ent:name := event:attrs{"name"} || ent:name

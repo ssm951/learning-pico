@@ -2,6 +2,7 @@ ruleset wovyn_base {
     meta {
         use module sensor_profile alias profile
         use module io.picolabs.wrangler alias wrangler
+        use module io.picolabs.subscription alias subs
     }
 
     rule init {
@@ -10,6 +11,7 @@ ruleset wovyn_base {
             tags = ["sensor"]
             eventPolicy = {"allow": [{"domain": "*", "name": "*"}], "deny": []}
             queryPolicy = {"allow": [{"rid": "*", "name": "*"}], "deny": []}
+            wellKnown_eci = subs:wellKnown_Rx(){"id"}
         }
         every {
             wrangler:createChannel(tags,eventPolicy,queryPolicy) setting(channel)
@@ -17,11 +19,29 @@ ruleset wovyn_base {
                 { "eci": wrangler:parent_eci(), 
                   "domain": "sensor", "type": "init_complete",
                   "attrs": event:attrs.put("channel", channel{"id"})
+                                        .put("wellKnown_eci", wellKnown_eci)
                 }
             )
         }
         always {
             
+        }
+    }
+
+    rule auto_accept {
+        select when wrangler inbound_pending_subscription_added
+        pre {
+          my_role = event:attr("Rx_role")
+          their_role = event:attr("Tx_role")
+        }
+        if my_role=="sensor" && their_role=="management" then noop()
+        fired {
+          raise wrangler event "pending_subscription_approval"
+            attributes event:attrs
+          ent:subscriptionTx := event:attr("Tx")
+        } else {
+          raise wrangler event "inbound_rejection"
+            attributes event:attrs
         }
     }
 
@@ -61,13 +81,19 @@ ruleset wovyn_base {
     rule threshold_notification {
         select when wovyn threshold_violation
         pre {
+            tx = subs:established().klog().head(){"Tx"}.klog()
             temperature = event:attrs{"temperature"} || ""
+            message = "Temperature is over " + profile:temperature_threshold() + " degrees! It is " + temperature + " degrees."
         }
-        fired {
-            raise sms event "new_message" attributes {
-                "to": profile:notify_number(),
-                "message": "Temperature is over " + profile:temperature_threshold() + " degrees! It is " + temperature + " degrees."
-            }
-        } 
+            event:send({"eci":tx,
+                "domain":"sensor", "name":"threshold_violation",
+                "attrs":{
+                    "wellKnown_Tx":subs:wellKnown_Rx(){"id"},
+                    "message": message
+                }
+        })
+        always {
+
+        }
     }
 }

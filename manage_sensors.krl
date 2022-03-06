@@ -1,7 +1,8 @@
 ruleset manage_sensors {
     meta {
         use module io.picolabs.wrangler alias wrangler
-        shares showChildren, getSensors, getSensorChannels, getSensorTemperatures
+        use module io.picolabs.subscription alias subs
+        shares showChildren, getSensors, getSensorSubscriptions, getSensorTemperatures
     }
 
     global {
@@ -11,12 +12,14 @@ ruleset manage_sensors {
         getSensors = function() {
             ent:sensors
         }
-        getSensorChannels = function() {
-            ent:sensor_channels
+        getSensorSubscriptions = function() {
+            ent:sensors.map(function(v,k) {
+                v{"Tx"}
+            })   
         }
         getSensorTemperatures = function() {
-            ent:sensors.map(function(v,k) {
-                    wrangler:picoQuery(ent:sensors{k},"temperature_store","temperatures",{})
+            getSensorSubscriptions().map(function(v,k) {
+                    wrangler:picoQuery(v,"temperature_store","temperatures",{})
                 }
             )
         }
@@ -55,7 +58,6 @@ ruleset manage_sensors {
         select when wrangler ruleset_installed where event:attrs{"rids"} >< meta:rid
         always {
             ent:sensors := {}
-            ent:sensor_channels := {}
             ent:default_sms_number := "+16265816580"
             ent:default_threshold := 80.0
         }
@@ -98,26 +100,79 @@ ruleset manage_sensors {
         }
     }
 
+    rule add_external_sensor {
+        select when sensor add_external
+            name re#(.+)#
+            wellKnown_eci re#(.+)#
+            host re#(.+)#
+            setting(name, wellKnown_eci, host)
+        pre {
+            exists = ent:sensors >< name
+        }
+        if not exists then 
+            event:send({"eci": wellKnown_eci,
+                "domain":"wrangler", "name":"subscription",
+                "attrs": {
+                "wellKnown_Tx": subs:wellKnown_Rx(){"id"},
+                "Rx_role":"sensor", 
+                "Tx_role":"management",
+                "Tx_host": host,
+                "name": name+"-management", "channel_type":"subscription"
+                }
+            })    
+        fired {
+        } else {
+
+        }
+    }
+
     rule sensor_ready {
         select when sensor init_complete
-        pre{
-            name = event:attrs{"name"}
-            eci = event:attrs{"eci"}
-            channel = event:attrs{"channel"}
+            name re#(.+)#
+            eci re#(.+)#
+            channel re#(.+)#
+            wellKnown_eci re#(.+)#
+            setting(name, eci, channel, wellKnown_eci)
+        every {
+            event:send({ 
+                "eci": eci, 
+                "domain": "sensor", "type": "profile_updated",
+                "attrs": {
+                    "name": name,
+                    "sms_number": ent:default_sms_number,
+                    "threshold": ent:default_threshold
+                }
+            })
+            event:send({"eci": wellKnown_eci,
+                "domain":"wrangler", "name":"subscription",
+                "attrs": {
+                "wellKnown_Tx": subs:wellKnown_Rx(){"id"},
+                "Rx_role":"sensor", "Tx_role":"management",
+                "name": name+"-management", "channel_type":"subscription"
+                }
+            })        
         }
-        event:send(
-            { "eci": eci, 
-              "domain": "sensor", "type": "profile_updated",
-              "attrs": {
-                "name": name,
-                "sms_number": ent:default_sms_number,
-                "threshold": ent:default_threshold
-              }
-            }
-        )
-        always{
-            ent:sensors{name} := eci
-            ent:sensor_channels{name} := channel
+        always {
+            ent:sensors{[name,"eci"]} := eci
+            ent:sensors{[name,"channel"]} := channel 
+            ent:sensors{[name,"wellKnown_eci"]} := wellKnown_eci
+        }
+    }
+
+    rule auto_accept {
+        select when wrangler inbound_pending_subscription_added
+        pre {
+          my_role = event:attrs{"Rx_role"}.klog()
+          their_role = event:attrs{"Tx_role"}.klog()
+        }
+        if my_role=="management" && their_role=="sensor" then noop()
+        fired {
+            raise wrangler event "pending_subscription_approval"
+                attributes event:attrs
+            ent:sensors{[event:attrs{"name"}.substr(0, -11).klog(),"Tx"]} := event:attrs{"Tx"}
+        } else {
+            raise wrangler event "inbound_rejection"
+                attributes event:attrs
         }
     }
 
@@ -126,17 +181,14 @@ ruleset manage_sensors {
         pre {
             new_name = event:attrs{"new_name"}
             old_name = event:attrs{"old_name"}
-            exists = ent:sensors >< event:attrs{"new_name"}
-            eci = ent:sensors{old_name}
-            channel = ent:sensor_channels{new_name}
+            exists = ent:sensors >< new_name
+            data = ent:sensors{old_name}
         } //TODO Not handling errors if new name already exists. I think this is out of scope of the project anyways
         if event:attrs{"new_name"} && not exists then
             noop()
         fired {
             clear ent:sensors{old_name}
-            clear ent:sensor_channels{old_name} 
-            ent:sensors{new_name} := eci
-            ent:sensor_channels{new_name} := channel 
+            ent:sensors{new_name} := data
         }
     }
 
@@ -144,7 +196,7 @@ ruleset manage_sensors {
         select when sensor unneeded_sensor
         pre {
             name = event:attrs{"name"}
-            eci = ent:sensors{name}
+            eci = ent:sensors{[name,"eci"]}
         }
         if eci then
             send_directive("deleting_sensor", {"name": name, "eci":eci})
@@ -152,7 +204,6 @@ ruleset manage_sensors {
             raise wrangler event "child_deletion_request"
                 attributes {"eci": eci};
             clear ent:sensors{name}
-            clear ent:sensor_channels{name}
         }
     }
 }

@@ -2,7 +2,7 @@ ruleset manage_sensors {
     meta {
         use module io.picolabs.wrangler alias wrangler
         use module io.picolabs.subscription alias subs
-        shares showChildren, getSensors, getSensorSubscriptions, getSensorTemperatures
+        shares showChildren, getSensors, getSensorSubscriptions, getSensorTemperatures, getReports
     }
 
     global {
@@ -22,6 +22,11 @@ ruleset manage_sensors {
                     wrangler:picoQuery(v,"temperature_store","temperatures",{})
                 }
             )
+        }
+        getReports = function() {
+            ent:rcns.klog().map(function(id) {
+                {"rcn": id, "report": ent:reports{id}}
+            })
         }
         child_rulesets = [
             {
@@ -58,6 +63,8 @@ ruleset manage_sensors {
         select when wrangler ruleset_installed where event:attrs{"rids"} >< meta:rid
         always {
             ent:sensors := {}
+            ent:rcns := []
+            ent:reports := {}
             ent:default_sms_number := "+16265816580"
             ent:default_threshold := 80.0
         }
@@ -170,9 +177,61 @@ ruleset manage_sensors {
             raise wrangler event "pending_subscription_approval"
                 attributes event:attrs
             ent:sensors{[event:attrs{"name"}.substr(0, -11).klog(),"Tx"]} := event:attrs{"Tx"}
+            ent:sensors{[event:attrs{"name"}.substr(0, -11).klog(),"Rx"]} := event:attrs{"Rx"}
         } else {
             raise wrangler event "inbound_rejection"
                 attributes event:attrs
+        }
+    }
+
+    rule start_report_collection {
+        select when sensor start_report_collection
+        pre {
+            rcn = random:uuid()
+        }
+        fired {
+            ent:rcns := ent:rcns.slice(1,4).klog()
+             if ent:rcns.length() >= 5
+            ent:rcns := ent:rcns.append(rcn)
+            ent:reports{rcn} := {"reports": [], "count": 0, "timestamp": time:now()}
+            raise sensor event "scatter_request"
+                attributes {"rcn": rcn}
+        }
+    }
+
+    rule scatter_report_request {
+        select when sensor scatter_request
+            rcn re#(.+)#
+            setting(rcn)
+        foreach getSensors() setting (v,name)
+        pre {
+            tx = v{"Tx"}
+            rx = v{"Rx"}
+        }
+        event:send({ 
+            "eci": tx, 
+            "domain": "sensor", "type": "pull_report",
+            "attrs": {
+                "rcn": rcn,
+                "name": name,
+                "channel": rx
+            }
+        })
+    }
+
+    rule collect_reports {
+        select when sensor new_report
+            name re#(.+)#
+            rcn re#(.+)#
+        setting(name, rcn)
+        pre {
+            temperatures = event:attrs{"temperatures"}
+        }
+        if ent:rcns.klog() >< rcn.klog() then noop()
+        fired {
+            ent:reports{[rcn, "reports"]} := ent:reports{[rcn, "reports"]}.append({"name": name, "temperatures": temperatures}).klog() 
+            ent:reports{[rcn, "count"]} := ent:reports{[rcn, "count"]} + 1
+            ent:reports{[rcn, "timestamp"]} := time:now()
         }
     }
 
@@ -201,9 +260,9 @@ ruleset manage_sensors {
         if eci then
             send_directive("deleting_sensor", {"name": name, "eci":eci})
         fired {
+            clear ent:sensors{name}
             raise wrangler event "child_deletion_request"
                 attributes {"eci": eci};
-            clear ent:sensors{name}
         }
     }
 }

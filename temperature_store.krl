@@ -23,6 +23,25 @@ ruleset temperature_store {
         }
     }
 
+    
+    rule send_report {
+        select when sensor pull_report
+            name re#(.+)#
+            rcn re#(.+)#
+            channel re#(.+)#
+            setting(name, rcn, channel)
+        event:send({ 
+            "eci": channel, 
+            "domain": "sensor", "type": "new_report",
+            "attrs": {
+                "rcn": rcn,
+                "name": name,
+                "temperatures": temperatures()
+            }
+        })
+
+    }
+
     rule init {
         select when wrangler ruleset_installed where event:attrs{"rids"} >< meta:rid
         always {

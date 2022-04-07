@@ -40,8 +40,8 @@ ruleset wovyn_base {
             attributes event:attrs
           ent:subscriptionTx := event:attr("Tx")
         } else {
-          raise wrangler event "inbound_rejection"
-            attributes event:attrs
+        //   raise wrangler event "inbound_rejection"
+        //     attributes event:attrs
         }
     }
 

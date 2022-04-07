@@ -55,7 +55,12 @@ ruleset manage_sensors {
             },
             {
                 "name": "io.picolabs.wovyn.emitter", 
-                "url": "https://github.com/windley/temperature-network/raw/main/io.picolabs.wovyn.emitter.krl"},
+                "url": "https://github.com/windley/temperature-network/raw/main/io.picolabs.wovyn.emitter.krl"
+            },
+            {
+                "name": "gossip", 
+                "url": "file:///workspaces/cs462/rulesets/gossip.krl"
+            },
         ]
     }
 

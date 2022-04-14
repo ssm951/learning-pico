@@ -104,8 +104,7 @@ ruleset manage_sensors {
         select when sensor add_external
             name re#(.+)#
             wellKnown_eci re#(.+)#
-            host re#(.+)#
-            setting(name, wellKnown_eci, host)
+            setting(name, wellKnown_eci)
         pre {
             exists = ent:sensors >< name
         }
@@ -116,7 +115,7 @@ ruleset manage_sensors {
                 "wellKnown_Tx": subs:wellKnown_Rx(){"id"},
                 "Rx_role":"sensor", 
                 "Tx_role":"management",
-                "Tx_host": host,
+                // "Tx_host": host,
                 "name": name+"-management", "channel_type":"subscription"
                 }
             })    

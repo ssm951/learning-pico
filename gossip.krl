@@ -2,7 +2,7 @@ ruleset gossip {
     meta {
         use module io.picolabs.wrangler alias wrangler
         use module io.picolabs.subscription alias subs
-        shares origin, messages, state, rx_map, temperatures, getSchedule
+        shares origin, messages, state, rx_map, thresholdViolations, thresholdViolationCount, temperatures, getSchedule
     }
 
     global {
@@ -18,9 +18,30 @@ ruleset gossip {
         rx_map = function() {
             ent:rx_peers
         }
+        thresholdViolations = function() {
+            ent:state.keys()
+                .map(function(id) {
+                    {}.put(id, getReceivedThreshold(id)
+                            .map(function(msg) {
+                                msg{["Message", "Increment"]} 
+                            })
+                            .reduce(function(a,b){a + b}, 0))
+                })
+        }
+        thresholdViolationCount = function() {
+            ent:state.keys()
+                .map(function(id) {
+                    getReceivedThreshold(id)
+                    .map(function(msg) {
+                        msg{["Message", "Increment"]} 
+                    })
+                    .reduce(function(a,b){a + b}, 0)
+                })
+                .reduce(function(a,b) {a + b}, 0)
+        }
         temperatures = function() {
             ent:state.keys().map(function(id) {
-                {}.put(id, getReceivedMessages(id).mapMessageToTemperature())
+                {}.put(id, getReceivedReadings(id).mapMessageToTemperature())
             })
         }
         getSchedule = function() {
@@ -33,26 +54,57 @@ ruleset gossip {
         mapMessageToTemperature = function(self) {
             self.map(function(msg) {
                 {
-                    "temperature": msg{"Temperature"},
-                    "timestamp": msg{"Timestamp"}
+                    "temperature": msg{["Message", "Temperature"]},
+                    "timestamp": msg{["Message", "Timestamp"]}
                 }
             })
         }
-        getReceivedMessages = function(id) {
+        getReceivedReadings = function(id) {
             ent:state{[id, "messages"]}.keys().sort("numeric")
                         .filter(function(x) {x <= ent:state{[ent:origin, "seen", id]}})
+                        .filter(function(x) {
+                            ent:state{[id, "messages", x, "Type"]} == "reading"
+                        })
                         .map(function(x) {
                             ent:state{[id, "messages", x]}
-                        })
+                        }).klog("ReceivedReadings")
         }
-        createMessage = function(origin, seq, temperature, timestamp) {
+        getReceivedThreshold = function(id) {
+            ent:state{[id, "messages"]}.keys().sort("numeric")
+                        .filter(function(x) {x <= ent:state{[ent:origin, "seen", id]}})
+                        .filter(function(x) {
+                            ent:state{[id, "messages", x, "Type"]} == "threshold"
+                        })
+                        .map(function(x) {
+                            ent:state{[id, "messages", x]}
+                        }).klog("ReceivedThreshold")
+        }
+        getNewSequence = function() {
+            ent:state{[ent:origin, "seen", ent:origin]}.defaultsTo(-1) + 1
+        }
+        createTemperatureRumor = function(temperature, seq) {
             {
-                "MessageID": origin + ":" + seq,
-                "SensorID": origin,
-                "Temperature": temperature,
-                "Timestamp": timestamp,
+                "MessageID": ent:origin + ":" + seq,
+                "SensorID": ent:origin,
+                "Type": "reading",
+                "Message": {
+                    "Temperature": temperature,
+                    "Timestamp": time:now(),
+                }
            }
         }
+        createThresholdRumor = function(increment, seq) {
+            {
+                "MessageID": ent:origin + ":" + seq,
+                "SensorID": ent:origin,
+                "Type": "threshold",
+                "Message": {
+                    "Increment": increment,
+                    "Timestamp": time:now(),
+                }
+           }
+        }
+        
         sendRumor = defaction(tx, message) {
             event:send({ 
                 "eci": tx, 
@@ -90,6 +142,7 @@ ruleset gossip {
             // }
             ent:rx_peers := {}
             ent:process := true 
+            ent:violation := false
 
             schedule gossip event "heartbeat"
                 repeat << */10 * * * * * >>  attributes { } setting(id);
@@ -169,17 +222,37 @@ ruleset gossip {
         }
     }
 
-    rule new_message {
-        select when wovyn new_temperature_reading
+    rule threshold_violation_message {
+        select when wovyn threshold_violation
         pre {
             temperature = event:attrs{"temperature"} || ""
-            timestamp = time:now()
-            seq = ent:state{[ent:origin, "seen", ent:origin]}.defaultsTo(-1) + 1
+            seq = getNewSequence()
+            seq2 = seq + 1
+            increment = (ent:violation) => 0 | 1
         }
-        if not temperature.isnull() then noop()
         fired {
             raise gossip event "rumor"
-                attributes createMessage(ent:origin, seq, temperature, timestamp)
+                attributes createTemperatureRumor(temperature, seq).klog("Raising event for temperature")
+            raise gossip event "rumor"
+                attributes createThresholdRumor(increment, seq2).klog("Raising event for threshold")
+            ent:violation := true
+        }
+    }
+
+    rule no_violation_message {
+        select when wovyn no_violation
+        pre {
+            temperature = event:attrs{"temperature"} || ""
+            seq = getNewSequence()
+            seq2 = seq + 1
+            increment = (ent:violation) => -1 | 0
+        }
+        fired {
+            raise gossip event "rumor"
+                attributes createTemperatureRumor(temperature, seq).klog("Raising event for temperature")
+            raise gossip event "rumor"
+                attributes createThresholdRumor(increment, seq2).klog("Raising event for threshold")
+            ent:violation := false
         }
     }
 
@@ -253,11 +326,10 @@ ruleset gossip {
 
     rule handle_rumor {
         select when gossip rumor
+            Type re#(reading|threshold)#
             MessageID re#(.+)#
             SensorID re#(.+)#
-            Temperature re#(.+)#
-            Timestamp re#(.+)#
-            setting(messageId,sensorId,temperature,timestamp)
+            setting(type,messageId,sensorId)
         pre {
             seq = messageId.split(re#:#).tail().head().klog("Parsed Sequence number").as("Number")
             seenSeq = ent:state{[ent:origin, "seen", sensorId]}.defaultsTo(-1).klog("Existing seen")

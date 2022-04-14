@@ -71,11 +71,14 @@ ruleset wovyn_base {
         pre {
             temperature = event:attrs{"temperature"} || ""
         }
+        if (temperature > profile:temperature_threshold().klog("temp threshold")) then noop()
         fired {
             raise wovyn event "threshold_violation" 
-                attributes event:attrs
-                if (temperature > profile:temperature_threshold().klog("temp threshold"));
-        } 
+                attributes event:attrs;
+        } else {
+            raise wovyn event "no_violation"
+                attributes event:attrs;
+        }
     }
 
     rule threshold_notification {
